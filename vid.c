@@ -5,26 +5,30 @@
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 
-#define N_VERTS 256
 #define MAX_LOG 256
 
-static GLuint vao;
-static GLuint vbo;
+static GLuint vao[2];
+static GLuint vbo[2];
 static GLuint prog;
 static GLint trans_loc;
 static GLint scale_loc;
 
-#define VERTS_SIZE (N_VERTS * sizeof(vec2))
-
 typedef float f32;
 typedef int i32;
+
+static SDL_Window *wnd;
 
 typedef struct vec2 {
   f32 x;
   f32 y;
 } vec2;
 
-void die(const char *fmt, ...) {
+#define MAX_VERTS 256
+#define VERTS_SIZE (MAX_VERTS * sizeof(vec2))
+
+static vec2 verts[MAX_VERTS];
+
+static void die(const char *fmt, ...) {
   va_list ap;  
   va_start(ap, fmt);
   vfprintf(stderr, fmt, ap);
@@ -32,26 +36,25 @@ void die(const char *fmt, ...) {
   exit(1);
 }
 
+static void bind_data(int i, int sz, const void *data, GLenum type) {
+  glBindVertexArray(vao[i]);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo[i]);
+  glBufferData(GL_ARRAY_BUFFER, sz, data, type);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, NULL);
+  glEnableVertexAttribArray(0);
+}
+
 static void init_verts(void) {
+  glCreateVertexArrays(2, vao);
+  glCreateBuffers(2, vbo);
   f32 theta = 0.0f;
-  vec2 *verts = malloc(VERTS_SIZE);
-  if (!verts)
-    die("malloc: out of memory\n");
-  for (i32 i = 0; i < N_VERTS; i++) {
+  for (i32 i = 0; i < MAX_VERTS; i++) {
     verts[i].x = cosf(theta);
     verts[i].y = sinf(theta);
-    theta += 2.0F * M_PI / (N_VERTS - 1); 
+    theta += 2.0f * M_PI / (MAX_VERTS - 1); 
   }
-  glCreateVertexArrays(1, &vao);
-  glBindVertexArray(vao);
-  glCreateBuffers(1, &vbo);
-  glBindBuffer(GL_ARRAY_BUFFER, vbo);
-  glBufferData(GL_ARRAY_BUFFER, VERTS_SIZE, verts, GL_STATIC_DRAW);
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(struct vec2), NULL);
-  glEnableVertexAttribArray(0);
-  glBindVertexArray(0);
-  free(verts);
-  verts = NULL;
+  bind_data(0, VERTS_SIZE, verts, GL_STATIC_DRAW);
+  //bind_data(1, VERTS_SIZE, NULL, GL_DYNAMIC_DRAW);
 }
 
 static const char vs_src[] = 
@@ -125,26 +128,35 @@ int draw(int frame) {
   glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
   glClear(GL_COLOR_BUFFER_BIT);
   glUseProgram(prog);
-  glBindVertexArray(vao);
   if (!valid && scanf("%d,%f,%f,%f", &f, &x, &y, &m) != 4)
       return -1;
   valid = 1;
   int n = 0;
-  while (f == frame) {
+  glBindVertexArray(vao[0]);
+  int res = 1;
+  while (f == frame && res > 0) {
     glUniform2f(trans_loc, x, y);
     f32 r = 0.05f * sqrtf(m);
     glUniform2f(scale_loc, r, r); 
-    glDrawArrays(GL_TRIANGLE_FAN, 0, N_VERTS);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, MAX_VERTS);
+    if (n == MAX_VERTS)
+      die("too many verts\n");
+    verts[n] = (vec2) {x, y};
     if (scanf("%d,%f,%f,%f", &f, &x, &y, &m) != 4)
-      return n ? 0 : -1;
-    n++;
+      res = n ? 0 : -1;
+    else
+      n++;
   }
-  return 1;
+  bind_data(1, n * 8, verts, GL_STATIC_DRAW);
+  glUniform2f(trans_loc, 0.0f, 0.0f);
+  glUniform2f(scale_loc, 1.0f, 1.0f);
+  glDrawArrays(GL_LINE_STRIP, 0, n);
+  return res;
 }
 
 #define WIDTH 480 
 #define HEIGHT 480
-#define FPS 100 
+#define FPS 100
 
 static uint8_t pixels[WIDTH * HEIGHT * 3];
 static const char *path = "pendulum.mp4";
@@ -292,7 +304,6 @@ int main(int argc, char **argv) {
     fputs("too many args\n", stderr);
     exit(1);
   }
-  SDL_Window *wnd;
   GLuint fbo;
   GLuint tex;
   if (SDL_Init(SDL_INIT_EVERYTHING))
